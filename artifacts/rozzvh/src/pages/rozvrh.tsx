@@ -4,10 +4,9 @@ import { useAuth } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { createScheduleItem, deleteScheduleItem, listFriendScheduleItems, listScheduleItems, updateScheduleItem, type ScheduleItem, type ScheduleItemInput } from "@/lib/schedule";
 import { FriendsDialog } from "@/components/friends-dialog";
-import type { Profile } from "@/lib/friends";
+import { listFriendships, type Profile } from "@/lib/friends";
 
 const weekdays = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota", "Neděle"];
-const shortDays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
 const types = ["Přednáška", "Seminář", "Cvičení", "Laboratoř", "Konzultace", "Jiné"];
 const blankForm = { title: "", day: 1, start_time: "08:00", end_time: "09:30", room: "", type: "Přednáška" };
 
@@ -28,6 +27,33 @@ function weekLabel(start: Date) {
   const end = addDays(start, 6);
   const format = (date: Date) => new Intl.DateTimeFormat("cs-CZ", { day: "numeric", month: "short" }).format(date);
   return `${format(start)} – ${format(end)} ${end.getFullYear()}`;
+}
+
+function timeToMinutes(value: string) {
+  const [hours, minutes] = value.slice(0, 5).split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function arrangeDayItems(items: ScheduleItem[], axisStart: number, axisEnd: number) {
+  const laneEnds: number[] = [];
+  const events = [...items]
+    .sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time))
+    .map((item) => {
+      const start = timeToMinutes(item.start_time);
+      const end = timeToMinutes(item.end_time);
+      let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
+      if (lane < 0) lane = laneEnds.length;
+      laneEnds[lane] = end;
+
+      return {
+        item,
+        lane,
+        left: ((start - axisStart) / (axisEnd - axisStart)) * 100,
+        width: ((end - start) / (axisEnd - axisStart)) * 100,
+      };
+    });
+
+  return { events, laneCount: Math.max(1, laneEnds.length) };
 }
 
 function friendlyError(error: unknown, fallback: string) {
