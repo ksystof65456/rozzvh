@@ -1,0 +1,1 @@
+- [Friend schedule privacy](friend-schedule-privacy.md) — account discovery is by exact username; only accepted friends can read schedules, enforced by Supabase RLS.

@@ -23,7 +23,11 @@ type AuthContextValue = {
   user: User | null;
   error: string | null;
   signIn: (email: string, password: string) => Promise<void>;
-  signUp: (email: string, password: string) => Promise<boolean>;
+  signUp: (
+    email: string,
+    password: string,
+    profile: { username: string; display_name: string },
+  ) => Promise<boolean>;
   signOut: () => Promise<void>;
 };
 
@@ -102,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         if (signInError) throw signInError;
       },
-      signUp: async (email, password) => {
+      signUp: async (email, password, profile) => {
         const redirectTo = new URL(
           import.meta.env.BASE_URL,
           window.location.origin,
@@ -111,7 +115,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           await requireSupabaseClient().auth.signUp({
             email: email.trim(),
             password,
-            options: { emailRedirectTo: redirectTo },
+            options: {
+              emailRedirectTo: redirectTo,
+              data: {
+                username: profile.username,
+                display_name: profile.display_name,
+              },
+            },
           });
         if (signUpError) throw signUpError;
         return Boolean(data.session);

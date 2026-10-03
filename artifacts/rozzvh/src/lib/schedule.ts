@@ -1,6 +1,5 @@
-import type { User } from "@supabase/supabase-js";
-
 import { requireSupabaseClient } from "@/lib/supabase";
+import { requireVerifiedUser } from "@/lib/session";
 
 export type ScheduleItem = {
   id: string;
@@ -23,31 +22,6 @@ export type ScheduleItemInput = {
   type: string;
 };
 
-async function requireVerifiedSession(userId: string): Promise<User> {
-  const client = requireSupabaseClient();
-  const {
-    data: { session },
-    error: sessionError,
-  } = await client.auth.getSession();
-
-  if (sessionError) throw sessionError;
-  if (!session?.access_token || session.user.id !== userId) {
-    throw new Error("Pro načtení rozvrhu se znovu přihlaste.");
-  }
-
-  const {
-    data: { user },
-    error: userError,
-  } = await client.auth.getUser(session.access_token);
-
-  if (userError) throw userError;
-  if (!user || user.id !== userId) {
-    throw new Error("Přihlášení se nepodařilo ověřit. Přihlaste se znovu.");
-  }
-
-  return user;
-}
-
 function validateInput(input: ScheduleItemInput): void {
   if (!input.title.trim()) {
     throw new Error("Název předmětu nesmí být prázdný.");
@@ -67,14 +41,13 @@ function validateInput(input: ScheduleItemInput): void {
   }
 }
 
-export async function listScheduleItems(userId: string): Promise<ScheduleItem[]> {
-  await requireVerifiedSession(userId);
+async function listItemsForOwner(ownerId: string): Promise<ScheduleItem[]> {
   const { data, error } = await requireSupabaseClient()
     .from("schedule_items")
     .select(
       "id, user_id, title, day, start_time, end_time, room, type, created_at",
     )
-    .eq("user_id", userId)
+    .eq("user_id", ownerId)
     .order("day", { ascending: true })
     .order("start_time", { ascending: true });
 
@@ -82,11 +55,28 @@ export async function listScheduleItems(userId: string): Promise<ScheduleItem[]>
   return (data ?? []) as ScheduleItem[];
 }
 
+export async function listScheduleItems(userId: string): Promise<ScheduleItem[]> {
+  await requireVerifiedUser(userId);
+  return listItemsForOwner(userId);
+}
+
+export async function listFriendScheduleItems(
+  viewerId: string,
+  friendId: string,
+): Promise<ScheduleItem[]> {
+  await requireVerifiedUser(viewerId);
+  if (!friendId || friendId === viewerId) {
+    throw new Error("Vyberte platného přítele.");
+  }
+  // RLS returns rows only while an accepted friendship exists.
+  return listItemsForOwner(friendId);
+}
+
 export async function createScheduleItem(
   userId: string,
   input: ScheduleItemInput,
 ): Promise<ScheduleItem> {
-  await requireVerifiedSession(userId);
+  await requireVerifiedUser(userId);
   validateInput(input);
 
   const { data, error } = await requireSupabaseClient()
@@ -112,7 +102,7 @@ export async function updateScheduleItem(
   itemId: string,
   input: ScheduleItemInput,
 ): Promise<ScheduleItem> {
-  await requireVerifiedSession(userId);
+  await requireVerifiedUser(userId);
   validateInput(input);
 
   const { data, error } = await requireSupabaseClient()
@@ -138,7 +128,7 @@ export async function deleteScheduleItem(
   userId: string,
   itemId: string,
 ): Promise<void> {
-  await requireVerifiedSession(userId);
+  await requireVerifiedUser(userId);
   const { error } = await requireSupabaseClient()
     .from("schedule_items")
     .delete()

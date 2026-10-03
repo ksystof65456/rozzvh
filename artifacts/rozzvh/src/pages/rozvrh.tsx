@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, ChevronDown, Clock3, DoorOpen, LoaderCircle, LogOut, Pencil, Plus, Trash2, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, ChevronDown, Clock3, DoorOpen, LoaderCircle, LogOut, Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { createScheduleItem, deleteScheduleItem, listScheduleItems, updateScheduleItem, type ScheduleItem, type ScheduleItemInput } from "@/lib/schedule";
+import { createScheduleItem, deleteScheduleItem, listFriendScheduleItems, listScheduleItems, updateScheduleItem, type ScheduleItem, type ScheduleItemInput } from "@/lib/schedule";
+import { FriendsDialog } from "@/components/friends-dialog";
+import type { Profile } from "@/lib/friends";
 
 const weekdays = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota", "Neděle"];
 const shortDays = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"];
@@ -33,6 +35,8 @@ function friendlyError(error: unknown, fallback: string) {
   if (!text) return fallback;
   if (/invalid login|invalid credentials/i.test(text)) return "E-mail nebo heslo nesouhlasí. Zkontrolujte je a zkuste to znovu.";
   if (/already registered|user already/i.test(text)) return "Tento e-mail už má účet. Zkuste se přihlásit.";
+  if (/profiles_username_unique|duplicate key|username.*already/i.test(text)) return "Toto uživatelské jméno už někdo používá. Zvolte jiné.";
+  if (/database error saving new user/i.test(text)) return "Profil se nepodařilo vytvořit. Spusťte aktuální SQL skript v Supabase a zkuste registraci znovu.";
   if (/password/i.test(text) && /at least|short|weak/i.test(text)) return "Heslo je příliš krátké. Zvolte alespoň 6 znaků.";
   if (/network|fetch/i.test(text)) return "Nepodařilo se připojit. Zkontrolujte internet a zkuste to znovu.";
   return text;
@@ -41,6 +45,8 @@ function friendlyError(error: unknown, fallback: string) {
 function AuthScreen() {
   const { signIn, signUp, status, error: authError } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
+  const [displayName, setDisplayName] = useState("");
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [notice, setNotice] = useState("");
@@ -58,10 +64,21 @@ function AuthScreen() {
       setNotice("Heslo musí mít alespoň 6 znaků.");
       return;
     }
+    if (isRegister && (!displayName.trim() || displayName.trim().length > 40)) {
+      setNotice("Zobrazované jméno musí mít 1–40 znaků.");
+      return;
+    }
+    if (isRegister && !/^[a-z0-9_]{3,24}$/.test(username.trim().toLowerCase())) {
+      setNotice("Uživatelské jméno musí mít 3–24 znaků: malá písmena, čísla nebo podtržítko.");
+      return;
+    }
     setBusy(true);
     try {
       if (isRegister) {
-        const hasSession = await signUp(email, password);
+        const hasSession = await signUp(email, password, {
+          username: username.trim().toLowerCase(),
+          display_name: displayName.trim(),
+        });
         if (!hasSession) setNotice("Účet je vytvořený. Potvrďte e-mail z doručené zprávy a potom se přihlaste.");
       } else {
         await signIn(email, password);
@@ -99,6 +116,13 @@ function AuthScreen() {
         <h1>{isRegister ? <>Vytvořte si<br />svůj rozvrh.</> : <>Zpátky<br />do rytmu.</>}</h1>
         <p className="auth-copy">{isRegister ? "Založte si účet a mějte výuku vždy po ruce." : "Přihlaste se a podívejte se, co vás tento týden čeká."}</p>
         <form onSubmit={submit} className="auth-form">
+          {isRegister && <>
+            <label htmlFor="auth-display-name">Zobrazované jméno</label>
+            <input id="auth-display-name" data-testid="input-display-name" type="text" autoComplete="name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Jak vás mají přátelé vidět" required maxLength={40} />
+            <label htmlFor="auth-username">Uživatelské jméno</label>
+            <input id="auth-username" data-testid="input-username" type="text" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value.toLowerCase())} placeholder="např. jana_novakova" required minLength={3} maxLength={24} pattern="[a-z0-9_]{3,24}" />
+            <p className="auth-help">Přátelé vás najdou podle uživatelského jména, ne podle e-mailu.</p>
+          </>}
           <label htmlFor="auth-email">E-mail</label>
           <input id="auth-email" data-testid="input-email" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="jmeno@univerzita.cz" required />
           <label htmlFor="auth-password">Heslo</label>
@@ -227,33 +251,43 @@ function ScheduleApp({ userId }: { userId: string }) {
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [selectedFriend, setSelectedFriend] = useState<Profile | null>(null);
+  const [friendsDialogOpen, setFriendsDialogOpen] = useState(false);
   const [dialogItem, setDialogItem] = useState<ScheduleItem | null | undefined>(undefined);
   const [signOutError, setSignOutError] = useState("");
   const isCurrentWeek = weekStart.getTime() === currentMonday.getTime();
+  const selectedFriendId = selectedFriend?.user_id ?? null;
+  const loadSequence = useRef(0);
 
   const loadItems = useCallback(async () => {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     setLoadError("");
     try {
-      const result = await listScheduleItems(userId);
-      setItems(result);
+      const result = selectedFriendId
+        ? await listFriendScheduleItems(userId, selectedFriendId)
+        : await listScheduleItems(userId);
+      if (sequence === loadSequence.current) setItems(result);
     } catch (error) {
-      setLoadError(friendlyError(error, "Rozvrh se nepodařilo načíst. Zkuste to znovu."));
+      if (sequence === loadSequence.current) {
+        setLoadError(friendlyError(error, "Rozvrh se nepodařilo načíst. Zkuste to znovu."));
+      }
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [userId]);
+  }, [selectedFriendId, userId]);
 
   useEffect(() => {
-    let active = true;
     setItems([]);
-    setLoading(true);
-    setLoadError("");
-    listScheduleItems(userId).then((result) => { if (active) setItems(result); })
-      .catch((error: unknown) => { if (active) setLoadError(friendlyError(error, "Rozvrh se nepodařilo načíst. Zkuste to znovu.")); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [userId]);
+    void loadItems();
+    return () => { loadSequence.current += 1; };
+  }, [loadItems]);
+
+  useEffect(() => {
+    if (!selectedFriendId) return;
+    const interval = window.setInterval(() => { void loadItems(); }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [loadItems, selectedFriendId]);
 
   const shownItems = useMemo(() => items.filter((item) => {
     const date = addDays(weekStart, item.day - 1);
@@ -272,15 +306,18 @@ function ScheduleApp({ userId }: { userId: string }) {
     <div className="app-shell">
       <header className="topbar"><div className="topbar-title">rozvrh<span>.</span></div></header>
       <main className="schedule-main">
-        <section className="schedule-intro">
+        <section className={`schedule-intro${selectedFriend ? " friend-view-intro" : ""}`}>
           <div>
-            <p className="eyebrow">OSOBNÍ ROZVRH</p>
-            <h1>Váš týden<span>.</span></h1>
+            <p className="eyebrow">{selectedFriend ? "SDÍLENÝ ROZVRH" : "OSOBNÍ ROZVRH"}</p>
+            <h1>{selectedFriend ? `Rozvrh ${selectedFriend.display_name}` : <>Váš týden<span>.</span></>}</h1>
+            {selectedFriend && <p className="friend-subtitle">@{selectedFriend.username} · sdílí s vámi svůj rozvrh</p>}
           </div>
           <div className="intro-actions">
             <span className="user-avatar" title={email}>{initials}</span>
             <button type="button" className="signout-button" data-testid="button-signout" onClick={async () => { setSignOutError(""); try { await signOut(); } catch { setSignOutError("Odhlášení se nepodařilo. Zkuste to znovu."); } }} aria-label="Odhlásit se"><LogOut size={17} /></button>
-            <button type="button" data-testid="button-add-item" className="button button-primary add-button" onClick={() => setDialogItem(null)}><Plus size={18} /><span>Přidat výuku</span></button>
+            {selectedFriend && <button type="button" data-testid="button-own-schedule" className="button button-soft own-schedule-button" onClick={() => setSelectedFriend(null)}><ArrowLeft size={15} /><span>Můj rozvrh</span></button>}
+            <button type="button" data-testid="button-open-friends" className="button button-soft friends-button" onClick={() => setFriendsDialogOpen(true)}><Users size={16} /><span>Přátelé</span></button>
+            {!selectedFriend && <button type="button" data-testid="button-add-item" className="button button-primary add-button" onClick={() => setDialogItem(null)}><Plus size={18} /><span>Přidat výuku</span></button>}
           </div>
         </section>
         <section className="week-toolbar" aria-label="Navigace v týdnech">
@@ -300,10 +337,10 @@ function ScheduleApp({ userId }: { userId: string }) {
         ) : items.length === 0 ? (
           <section className="empty-panel">
             <div className="empty-illustration"><div className="empty-paper"><span /><span /><span /></div><div className="empty-orbit"><Plus size={18} /></div></div>
-            <p className="eyebrow">TÝDEN JE ZATÍM VOLNÝ</p>
-            <h2>Začněte první hodinou.</h2>
-            <p>Přidejte předmět a čas výuky. Váš rozvrh zůstává soukromý.</p>
-            <button type="button" className="button button-primary" data-testid="button-empty-add" onClick={() => setDialogItem(null)}><Plus size={17} /> Přidat první výuku</button>
+            <p className="eyebrow">{selectedFriend ? "SDÍLENÝ ROZVRH" : "TÝDEN JE ZATÍM VOLNÝ"}</p>
+            <h2>{selectedFriend ? "Tento rozvrh je zatím prázdný." : "Začněte první hodinou."}</h2>
+            <p>{selectedFriend ? `${selectedFriend.display_name} zatím nemá přidané žádné hodiny.` : "Přidejte předmět a čas výuky. Váš rozvrh zůstává soukromý."}</p>
+            {!selectedFriend && <button type="button" className="button button-primary" data-testid="button-empty-add" onClick={() => setDialogItem(null)}><Plus size={17} /> Přidat první výuku</button>}
           </section>
         ) : (
           <>
@@ -322,7 +359,7 @@ function ScheduleApp({ userId }: { userId: string }) {
                       <div className="class-time"><Clock3 size={12} />{item.start_time.slice(0, 5)}<span>–</span>{item.end_time.slice(0, 5)}</div>
                       <h3>{item.title}</h3>
                       <div className="class-meta"><span>{item.type}</span>{item.room && <span className="room-meta"><DoorOpen size={12} />{item.room}</span>}</div>
-                      <button type="button" className="item-edit" aria-label={`Upravit ${item.title}`} data-testid={`button-edit-item-${item.id}`} onClick={() => setDialogItem(item)}><Pencil size={14} /></button>
+                      {!selectedFriend && <button type="button" className="item-edit" aria-label={`Upravit ${item.title}`} data-testid={`button-edit-item-${item.id}`} onClick={() => setDialogItem(item)}><Pencil size={14} /></button>}
                     </article>)}
                   </div>
                 </div>;
@@ -333,6 +370,7 @@ function ScheduleApp({ userId }: { userId: string }) {
         )}
       </main>
       {dialogItem !== undefined && <ScheduleForm item={dialogItem} userId={userId} onClose={() => setDialogItem(undefined)} onSaved={saveItem} onDeleted={(id) => { setItems((current) => current.filter((item) => item.id !== id)); setDialogItem(undefined); }} />}
+      {friendsDialogOpen && <FriendsDialog userId={userId} onClose={() => setFriendsDialogOpen(false)} onSelectFriend={(profile) => { setSelectedFriend(profile); setFriendsDialogOpen(false); }} onFriendshipRemoved={(friendId) => { if (selectedFriendId === friendId) setSelectedFriend(null); }} />}
     </div>
   );
 }
