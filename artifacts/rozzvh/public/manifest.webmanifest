@@ -1,0 +1,19 @@
+{
+  "name": "Rozvrh",
+  "short_name": "Rozvrh",
+  "description": "Týdenní rozvrh pro vysokoškoláky.",
+  "lang": "cs",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f7f2",
+  "theme_color": "#167354",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

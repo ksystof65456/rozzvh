@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/rozzvh/"
+title = "Rozvrh"
+description = "A Czech-language university schedule planner where students manage a personal weekly timetable with Supabase authentication and securely scoped schedule data."
+version = "1.0.0"
+id = "artifacts/rozzvh"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/rozzvh/" ]
+localPort = 19282
+
+[services.development]
+run = "pnpm --filter @workspace/rozzvh run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/rozzvh", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/rozzvh/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19282"
+BASE_PATH = "/rozzvh/"
