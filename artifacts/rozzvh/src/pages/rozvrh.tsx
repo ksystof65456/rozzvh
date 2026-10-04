@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, ChevronDown, Clock3, DoorOpen, LoaderCircle, LogOut, Pencil, Plus, Trash2, Users, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, ChevronDown, LoaderCircle, LogOut, Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { createScheduleItem, deleteScheduleItem, listFriendScheduleItems, listScheduleItems, updateScheduleItem, type ScheduleItem, type ScheduleItemInput } from "@/lib/schedule";
@@ -273,10 +273,12 @@ function ScheduleApp({ userId }: { userId: string }) {
   const { signOut, user } = useAuth();
   const currentMonday = useMemo(() => mondayOf(new Date()), []);
   const [weekStart, setWeekStart] = useState(currentMonday);
-  const [mobileDay, setMobileDay] = useState((new Date().getDay() + 6) % 7);
   const [items, setItems] = useState<ScheduleItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [friends, setFriends] = useState<Profile[]>([]);
+  const [friendsLoading, setFriendsLoading] = useState(true);
+  const [friendsError, setFriendsError] = useState("");
   const [selectedFriend, setSelectedFriend] = useState<Profile | null>(null);
   const [friendsDialogOpen, setFriendsDialogOpen] = useState(false);
   const [dialogItem, setDialogItem] = useState<ScheduleItem | null | undefined>(undefined);
@@ -284,6 +286,29 @@ function ScheduleApp({ userId }: { userId: string }) {
   const isCurrentWeek = weekStart.getTime() === currentMonday.getTime();
   const selectedFriendId = selectedFriend?.user_id ?? null;
   const loadSequence = useRef(0);
+  const friendshipSequence = useRef(0);
+
+  const loadFriends = useCallback(async () => {
+    const sequence = ++friendshipSequence.current;
+    setFriendsLoading(true);
+    setFriendsError("");
+    try {
+      const relationships = await listFriendships(userId);
+      if (sequence === friendshipSequence.current) {
+        const accepted = relationships
+          .filter((relationship) => relationship.status === "accepted")
+          .map((relationship) => relationship.other);
+        setFriends(accepted);
+        setSelectedFriend((current) => current && !accepted.some((friend) => friend.user_id === current.user_id) ? null : current);
+      }
+    } catch (error) {
+      if (sequence === friendshipSequence.current) {
+        setFriendsError(friendlyError(error, "Seznam přátel se nepodařilo načíst."));
+      }
+    } finally {
+      if (sequence === friendshipSequence.current) setFriendsLoading(false);
+    }
+  }, [userId]);
 
   const loadItems = useCallback(async () => {
     const sequence = ++loadSequence.current;
@@ -315,10 +340,32 @@ function ScheduleApp({ userId }: { userId: string }) {
     return () => window.clearInterval(interval);
   }, [loadItems, selectedFriendId]);
 
+  useEffect(() => {
+    void loadFriends();
+    const interval = window.setInterval(() => { void loadFriends(); }, 60_000);
+    return () => {
+      window.clearInterval(interval);
+      friendshipSequence.current += 1;
+    };
+  }, [loadFriends]);
+
   const shownItems = useMemo(() => items.filter((item) => {
     const date = addDays(weekStart, item.day - 1);
     return date >= weekStart && date <= addDays(weekStart, 6);
   }), [items, weekStart]);
+
+  const timelineBounds = useMemo(() => {
+    const starts = shownItems.map((item) => timeToMinutes(item.start_time));
+    const ends = shownItems.map((item) => timeToMinutes(item.end_time));
+    const startHour = Math.min(7, Math.floor((starts.length ? Math.min(...starts) : 8 * 60) / 60));
+    const endHour = Math.max(21, Math.ceil((ends.length ? Math.max(...ends) : 18 * 60) / 60));
+    return { start: startHour * 60, end: endHour * 60, startHour, endHour };
+  }, [shownItems]);
+  const hourMarks = useMemo(
+    () => Array.from({ length: timelineBounds.endHour - timelineBounds.startHour }, (_, index) => timelineBounds.startHour + index),
+    [timelineBounds],
+  );
+  const timelineColumns = `96px minmax(${Math.max(560, hourMarks.length * 78)}px, 1fr)`;
 
   function saveItem(item: ScheduleItem) {
     setItems((current) => [...current.filter((existing) => existing.id !== item.id), item].sort((a, b) => a.day - b.day || a.start_time.localeCompare(b.start_time)));
@@ -331,7 +378,43 @@ function ScheduleApp({ userId }: { userId: string }) {
   return (
     <div className="app-shell">
       <header className="topbar"><div className="topbar-title">rozvrh<span>.</span></div></header>
-      <main className="schedule-main">
+      <div className="schedule-layout">
+        <aside className="schedule-sidebar" aria-label="Výběr rozvrhu">
+          <div className="sidebar-list">
+            <span className="sidebar-group-label">VAŠE ROZVRHY</span>
+            <button
+              type="button"
+              data-testid="button-own-schedule"
+              className={`sidebar-schedule-option${selectedFriend ? "" : " active"}`}
+              aria-pressed={!selectedFriend}
+              onClick={() => setSelectedFriend(null)}
+            >
+              <span className="sidebar-option-icon"><CalendarDays size={17} /></span>
+              <span className="sidebar-option-copy"><strong>Můj rozvrh</strong><small>Osobní rozvrh</small></span>
+            </button>
+            <span className="sidebar-group-label friends-group-label">PŘÁTELÉ</span>
+            {friendsLoading && friends.length === 0 && <div className="sidebar-status" role="status">Načítám přátele…</div>}
+            {friendsError && <div className="sidebar-error" role="alert"><span>{friendsError}</span><button type="button" onClick={() => void loadFriends()}>Obnovit</button></div>}
+            {!friendsLoading && !friendsError && friends.length === 0 && <div className="sidebar-status">Zatím nemáte žádné přátele.</div>}
+            {friends.map((friend) => (
+              <button
+                key={friend.user_id}
+                type="button"
+                className={`sidebar-schedule-option friend-option${selectedFriendId === friend.user_id ? " active" : ""}`}
+                data-testid={`button-friend-schedule-${friend.user_id}`}
+                aria-pressed={selectedFriendId === friend.user_id}
+                onClick={() => setSelectedFriend(friend)}
+              >
+                <span className="friend-avatar" aria-hidden="true">{friend.display_name.slice(0, 1).toLocaleUpperCase("cs-CZ")}</span>
+                <span className="sidebar-option-copy"><strong>{friend.display_name}</strong><small>@{friend.username}</small></span>
+              </button>
+            ))}
+            <button type="button" data-testid="button-open-friends" className="sidebar-manage-button" onClick={() => setFriendsDialogOpen(true)}>
+              <Users size={16} /><span>Spravovat přátele</span>
+            </button>
+          </div>
+        </aside>
+        <main className="schedule-main">
         <section className={`schedule-intro${selectedFriend ? " friend-view-intro" : ""}`}>
           <div>
             <p className="eyebrow">{selectedFriend ? "SDÍLENÝ ROZVRH" : "OSOBNÍ ROZVRH"}</p>
@@ -341,8 +424,6 @@ function ScheduleApp({ userId }: { userId: string }) {
           <div className="intro-actions">
             <span className="user-avatar" title={email}>{initials}</span>
             <button type="button" className="signout-button" data-testid="button-signout" onClick={async () => { setSignOutError(""); try { await signOut(); } catch { setSignOutError("Odhlášení se nepodařilo. Zkuste to znovu."); } }} aria-label="Odhlásit se"><LogOut size={17} /></button>
-            {selectedFriend && <button type="button" data-testid="button-own-schedule" className="button button-soft own-schedule-button" onClick={() => setSelectedFriend(null)}><ArrowLeft size={15} /><span>Můj rozvrh</span></button>}
-            <button type="button" data-testid="button-open-friends" className="button button-soft friends-button" onClick={() => setFriendsDialogOpen(true)}><Users size={16} /><span>Přátelé</span></button>
             {!selectedFriend && <button type="button" data-testid="button-add-item" className="button button-primary add-button" onClick={() => setDialogItem(null)}><Plus size={18} /><span>Přidat výuku</span></button>}
           </div>
         </section>
@@ -357,7 +438,7 @@ function ScheduleApp({ userId }: { userId: string }) {
         </section>
         {signOutError && <div className="form-alert page-alert" role="alert">{signOutError}</div>}
         {loading ? (
-          <div className="timetable timetable-loading" aria-label="Načítám rozvrh"><div className="skeleton-heading" />{weekdays.map((day) => <div key={day} className="skeleton-column"><i /><i /><i /></div>)}</div>
+          <div className="timeline-loading" aria-label="Načítám rozvrh"><div className="skeleton-timeline-row" /><div className="skeleton-timeline-row" /><div className="skeleton-timeline-row" /></div>
         ) : loadError ? (
           <section className="state-panel error-state"><div className="state-icon"><CalendarDays size={23} /></div><h2>Rozvrh se nepodařilo načíst</h2><p>{loadError}</p><button type="button" className="button button-soft" data-testid="button-retry-load" onClick={loadItems}>Zkusit znovu</button></section>
         ) : items.length === 0 ? (
@@ -370,33 +451,50 @@ function ScheduleApp({ userId }: { userId: string }) {
           </section>
         ) : (
           <>
-            <div className="mobile-day-picker" role="tablist" aria-label="Výběr dne">
-              {shortDays.map((day, index) => <button key={day} type="button" role="tab" aria-selected={mobileDay === index} data-testid={`tab-day-${index + 1}`} className={mobileDay === index ? "day-tab active" : "day-tab"} onClick={() => setMobileDay(index)}><span>{day}</span><small>{addDays(weekStart, index).getDate()}</small>{shownItems.some((item) => item.day === index + 1) && <i />}</button>)}
-            </div>
-            <section className="timetable" aria-label={`Rozvrh na týden ${weekLabel(weekStart)}`}>
+            <section className="timeline-scroll" aria-label={`Rozvrh na týden ${weekLabel(weekStart)}`}>
+              <div className="timeline-table">
+                <div className="timeline-header" style={{ gridTemplateColumns: timelineColumns }}>
+                  <div className="timeline-day-label timeline-corner">DEN</div>
+                  <div className="timeline-hours" style={{ gridTemplateColumns: `repeat(${hourMarks.length}, minmax(78px, 1fr))` }}>
+                    {hourMarks.map((hour) => <span key={hour}>{String(hour).padStart(2, "0")}:00</span>)}
+                  </div>
+                </div>
               {weekdays.map((day, index) => {
                 const dayDate = addDays(weekStart, index);
-                const dayItems = shownItems.filter((item) => item.day === index + 1).sort((a, b) => a.start_time.localeCompare(b.start_time));
+                const dayItems = shownItems.filter((item) => item.day === index + 1);
+                const layout = arrangeDayItems(dayItems, timelineBounds.start, timelineBounds.end);
                 const isToday = dayDate.toDateString() === new Date().toDateString();
-                return <div key={day} className={`day-column ${mobileDay === index ? "mobile-active" : ""}`}>
-                  <div className={`day-heading ${isToday ? "is-today" : ""}`}><span>{weekdays[index]}</span><b>{dayDate.getDate()}</b></div>
-                  <div className="day-items">
-                    {dayItems.length === 0 ? <div className="day-empty"><span>—</span><span>Volno</span></div> : dayItems.map((item, itemIndex) => <article className={`class-item class-color-${(index + itemIndex) % 4}`} key={item.id} data-testid={`card-schedule-item-${item.id}`}>
-                      <div className="class-time"><Clock3 size={12} />{item.start_time.slice(0, 5)}<span>–</span>{item.end_time.slice(0, 5)}</div>
-                      <h3>{item.title}</h3>
-                      <div className="class-meta"><span>{item.type}</span>{item.room && <span className="room-meta"><DoorOpen size={12} />{item.room}</span>}</div>
-                      {!selectedFriend && <button type="button" className="item-edit" aria-label={`Upravit ${item.title}`} data-testid={`button-edit-item-${item.id}`} onClick={() => setDialogItem(item)}><Pencil size={14} /></button>}
-                    </article>)}
+                return <div key={day} className="timeline-row" style={{ gridTemplateColumns: timelineColumns }}>
+                  <div className={`timeline-day-label ${isToday ? "is-today" : ""}`}><span>{day}</span><b>{dayDate.getDate()}</b></div>
+                  <div className="timeline-track" style={{ height: `${Math.max(72, layout.laneCount * 50 + 16)}px` }}>
+                    {hourMarks.map((hour) => <i key={hour} className="timeline-gridline" style={{ left: `${((hour * 60 - timelineBounds.start) / (timelineBounds.end - timelineBounds.start)) * 100}%` }} />)}
+                    {dayItems.length === 0 && <span className="timeline-empty">Volno</span>}
+                    {layout.events.map(({ item, lane, left, width }, itemIndex) => {
+                      const eventClass = `timeline-event class-color-${(index + itemIndex) % 4}`;
+                      const eventStyle = { left: `${left}%`, width: `${width}%`, top: `${8 + lane * 50}px` };
+                      const eventLabel = `${item.title}, ${item.type}, ${item.start_time.slice(0, 5)}–${item.end_time.slice(0, 5)}${item.room ? `, místnost ${item.room}` : ""}`;
+                      const eventContent = <>
+                        <span className="timeline-event-time">{item.start_time.slice(0, 5)}–{item.end_time.slice(0, 5)}</span>
+                        <strong className="timeline-event-title">{item.title}</strong>
+                        <span className="timeline-event-details">{item.type}{item.room ? ` · ${item.room}` : ""}</span>
+                        {!selectedFriend && <Pencil className="timeline-event-edit-icon" size={11} aria-hidden="true" />}
+                      </>;
+                      return selectedFriend
+                        ? <article className={eventClass} key={item.id} data-testid={`card-schedule-item-${item.id}`} style={eventStyle} title={eventLabel} aria-label={eventLabel}>{eventContent}</article>
+                        : <button type="button" className={eventClass} key={item.id} data-testid={`card-schedule-item-${item.id}`} style={eventStyle} title={eventLabel} aria-label={`Upravit: ${eventLabel}`} onClick={() => setDialogItem(item)}>{eventContent}</button>;
+                    })}
                   </div>
                 </div>;
               })}
+              </div>
             </section>
             <div className="schedule-foot"><span><BookOpen size={14} /> {items.length} {items.length === 1 ? "předmět" : items.length < 5 ? "předměty" : "předmětů"} v rozvrhu</span><span>Časy jsou v místním čase</span></div>
           </>
         )}
-      </main>
+        </main>
+      </div>
       {dialogItem !== undefined && <ScheduleForm item={dialogItem} userId={userId} onClose={() => setDialogItem(undefined)} onSaved={saveItem} onDeleted={(id) => { setItems((current) => current.filter((item) => item.id !== id)); setDialogItem(undefined); }} />}
-      {friendsDialogOpen && <FriendsDialog userId={userId} onClose={() => setFriendsDialogOpen(false)} onSelectFriend={(profile) => { setSelectedFriend(profile); setFriendsDialogOpen(false); }} onFriendshipRemoved={(friendId) => { if (selectedFriendId === friendId) setSelectedFriend(null); }} />}
+      {friendsDialogOpen && <FriendsDialog userId={userId} onClose={() => { setFriendsDialogOpen(false); void loadFriends(); }} onSelectFriend={(profile) => { setSelectedFriend(profile); setFriendsDialogOpen(false); void loadFriends(); }} onFriendshipRemoved={(friendId) => { if (selectedFriendId === friendId) setSelectedFriend(null); void loadFriends(); }} />}
     </div>
   );
 }
