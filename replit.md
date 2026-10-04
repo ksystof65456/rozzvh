@@ -1,21 +1,29 @@
-# [Project name]
+# Rozvrh
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Česká PWA pro týdenní rozvrh vysokoškoláků, s účty a soukromými rozvrhy v Supabase.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- Install the imported workspace dependencies with `pnpm install --frozen-lockfile`.
+- Start the managed workflow `artifacts/rozzvh: web` in Replit; it runs `pnpm --filter @workspace/rozzvh run dev` with the assigned `PORT` and `BASE_PATH`.
+- Open the Rozvrh preview at `/rozzvh/`.
+- `pnpm --filter @workspace/rozzvh run typecheck` — check the timetable app.
+- `pnpm --filter @workspace/rozzvh run build` — build the static app.
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Required app configuration: `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (public anon or publishable key only, never a service-role key). Add these through Replit Secrets and restart the web workflow. Vite embeds them in the client build.
+- In the existing Supabase project, apply `artifacts/rozzvh/supabase/schema.sql` if its schema is not already installed, and allow the Replit preview URL ending in `/rozzvh/` in Supabase Authentication's Site URL / Redirect URLs.
+- Without Supabase configuration, the app shows a setup notice; sign-in and schedules cannot work.
+- Rozvrh calls Supabase directly. The imported API server and Canvas preview are not needed to run the timetable app.
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
-- DB: PostgreSQL + Drizzle ORM
+- Rozvrh auth and data: Supabase (existing external project; do not migrate its data).
+- Imported shared API scaffold: Express + PostgreSQL/Drizzle, separate from Rozvrh's Supabase data.
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
