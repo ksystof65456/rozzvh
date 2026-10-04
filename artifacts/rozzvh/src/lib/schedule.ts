@@ -10,6 +10,8 @@ export type ScheduleItem = {
   end_time: string;
   room: string | null;
   type: string;
+  repeat_every_two_weeks: boolean;
+  starts_week: string | null;
   created_at: string;
 };
 
@@ -20,13 +22,15 @@ export type ScheduleItemInput = {
   end_time: string;
   room: string | null;
   type: string;
+  repeat_every_two_weeks: boolean;
+  starts_week: string | null;
 };
 
 function validateInput(input: ScheduleItemInput): void {
   if (!input.title.trim()) {
     throw new Error("Název předmětu nesmí být prázdný.");
   }
-  if (!Number.isInteger(input.day) || input.day < 1 || input.day > 7) {
+  if (!Number.isInteger(input.day) || input.day < 1 || input.day > 5) {
     throw new Error("Vyberte platný den v týdnu.");
   }
   const validTime = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
@@ -39,13 +43,24 @@ function validateInput(input: ScheduleItemInput): void {
   if (!input.type.trim()) {
     throw new Error("Vyberte typ výuky.");
   }
+  if (input.repeat_every_two_weeks) {
+    if (!input.starts_week || !/^\d{4}-\d{2}-\d{2}$/.test(input.starts_week)) {
+      throw new Error("Vyberte týden, od kterého se má výuka opakovat.");
+    }
+    const startWeek = new Date(`${input.starts_week}T00:00:00`);
+    if (Number.isNaN(startWeek.getTime()) || startWeek.getDay() !== 1) {
+      throw new Error("Začátek opakování musí být pondělí.");
+    }
+  } else if (input.starts_week !== null) {
+    throw new Error("Týden začátku lze nastavit jen pro výuku každé dva týdny.");
+  }
 }
 
 async function listItemsForOwner(ownerId: string): Promise<ScheduleItem[]> {
   const { data, error } = await requireSupabaseClient()
     .from("schedule_items")
     .select(
-      "id, user_id, title, day, start_time, end_time, room, type, created_at",
+      "id, user_id, title, day, start_time, end_time, room, type, repeat_every_two_weeks, starts_week, created_at",
     )
     .eq("user_id", ownerId)
     .order("day", { ascending: true })
@@ -89,7 +104,7 @@ export async function createScheduleItem(
       user_id: userId,
     })
     .select(
-      "id, user_id, title, day, start_time, end_time, room, type, created_at",
+      "id, user_id, title, day, start_time, end_time, room, type, repeat_every_two_weeks, starts_week, created_at",
     )
     .single();
 
@@ -116,7 +131,7 @@ export async function updateScheduleItem(
     .eq("id", itemId)
     .eq("user_id", userId)
     .select(
-      "id, user_id, title, day, start_time, end_time, room, type, created_at",
+      "id, user_id, title, day, start_time, end_time, room, type, repeat_every_two_weeks, starts_week, created_at",
     )
     .single();
 

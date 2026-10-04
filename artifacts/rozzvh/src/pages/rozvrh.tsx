@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, ChevronDown, LoaderCircle, LogOut, Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase";
@@ -6,9 +6,19 @@ import { createScheduleItem, deleteScheduleItem, listFriendScheduleItems, listSc
 import { FriendsDialog } from "@/components/friends-dialog";
 import { listFriendships, type Profile } from "@/lib/friends";
 
-const weekdays = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota", "Neděle"];
+const weekdays = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek"];
 const types = ["Přednáška", "Seminář", "Cvičení", "Laboratoř", "Konzultace", "Jiné"];
-const blankForm = { title: "", day: 1, start_time: "08:00", end_time: "09:30", room: "", type: "Přednáška" };
+type StartWeekChoice = "this" | "next" | "existing";
+const blankForm = {
+  title: "",
+  day: 1,
+  start_time: "08:00",
+  end_time: "09:30",
+  room: "",
+  type: "Přednáška",
+  repeat_every_two_weeks: false,
+  start_week_choice: "this" as StartWeekChoice,
+};
 
 function mondayOf(date: Date) {
   const value = new Date(date);
@@ -23,8 +33,28 @@ function addDays(date: Date, amount: number) {
   return value;
 }
 
+function dateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateFromKey(key: string) {
+  const [year, month, day] = key.slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function isScheduledThisWeek(item: ScheduleItem, weekStart: Date) {
+  if (!item.repeat_every_two_weeks) return true;
+  if (!item.starts_week) return false;
+  const start = mondayOf(dateFromKey(item.starts_week));
+  const weekGap = Math.round((mondayOf(weekStart).getTime() - start.getTime()) / (7 * 24 * 60 * 60 * 1000));
+  return weekGap >= 0 && weekGap % 2 === 0;
+}
+
 function weekLabel(start: Date) {
-  const end = addDays(start, 6);
+  const end = addDays(start, 4);
   const format = (date: Date) => new Intl.DateTimeFormat("cs-CZ", { day: "numeric", month: "short" }).format(date);
   return `${format(start)} – ${format(end)} ${end.getFullYear()}`;
 }
@@ -185,7 +215,26 @@ function ScheduleForm({ item, onClose, onSaved, onDeleted, userId }: {
   onDeleted: (id: string) => void;
   userId: string;
 }) {
-  const [form, setForm] = useState({ ...blankForm, ...(item ? { title: item.title, day: item.day, start_time: item.start_time.slice(0, 5), end_time: item.end_time.slice(0, 5), room: item.room ?? "", type: item.type } : {}) });
+  const [form, setForm] = useState(() => {
+    const currentWeek = mondayOf(new Date());
+    const itemStartWeek = item?.starts_week ?? null;
+    const startWeekChoice: StartWeekChoice = !itemStartWeek || itemStartWeek === dateKey(currentWeek)
+      ? "this"
+      : itemStartWeek === dateKey(addDays(currentWeek, 7)) ? "next" : "existing";
+    return {
+      ...blankForm,
+      ...(item ? {
+        title: item.title,
+        day: item.day,
+        start_time: item.start_time.slice(0, 5),
+        end_time: item.end_time.slice(0, 5),
+        room: item.room ?? "",
+        type: item.type,
+      } : {}),
+      repeat_every_two_weeks: item?.repeat_every_two_weeks ?? false,
+      start_week_choice: startWeekChoice,
+    };
+  });
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
@@ -203,7 +252,20 @@ function ScheduleForm({ item, onClose, onSaved, onDeleted, userId }: {
       return;
     }
     setBusy(true);
-    const input: ScheduleItemInput = { ...form, day: Number(form.day), room: form.room.trim() || null, title: form.title.trim() };
+    const currentWeek = mondayOf(new Date());
+    const startsWeek = form.start_week_choice === "existing" && item?.starts_week
+      ? item.starts_week
+      : dateKey(form.start_week_choice === "next" ? addDays(currentWeek, 7) : currentWeek);
+    const input: ScheduleItemInput = {
+      title: form.title.trim(),
+      day: Number(form.day),
+      start_time: form.start_time,
+      end_time: form.end_time,
+      room: form.room.trim() || null,
+      type: form.type,
+      repeat_every_two_weeks: form.repeat_every_two_weeks,
+      starts_week: form.repeat_every_two_weeks ? startsWeek : null,
+    };
     try {
       const result = item
         ? await updateScheduleItem(userId, item.id, input)
@@ -254,6 +316,16 @@ function ScheduleForm({ item, onClose, onSaved, onDeleted, userId }: {
             <div><label htmlFor="class-start">Začátek</label><input id="class-start" data-testid="input-start-time" type="time" value={form.start_time} onChange={(event) => update("start_time", event.target.value)} required /></div>
             <div><label htmlFor="class-end">Konec</label><input id="class-end" data-testid="input-end-time" type="time" value={form.end_time} onChange={(event) => update("end_time", event.target.value)} required /></div>
           </div>
+          <label className="repeat-toggle" htmlFor="class-repeat-biweekly">
+            <input id="class-repeat-biweekly" data-testid="checkbox-repeat-biweekly" type="checkbox" checked={form.repeat_every_two_weeks} onChange={(event) => update("repeat_every_two_weeks", event.target.checked)} />
+            <span>Opakovat každé dva týdny</span>
+          </label>
+          {form.repeat_every_two_weeks && <fieldset className="repeat-start-options">
+            <legend>První týden výuky</legend>
+            <label><input type="radio" name="repeat-start-week" data-testid="radio-repeat-start-this" checked={form.start_week_choice === "this"} onChange={() => update("start_week_choice", "this")} /> Tento týden</label>
+            <label><input type="radio" name="repeat-start-week" data-testid="radio-repeat-start-next" checked={form.start_week_choice === "next"} onChange={() => update("start_week_choice", "next")} /> Příští týden</label>
+            {form.start_week_choice === "existing" && item?.starts_week && <label><input type="radio" name="repeat-start-week" checked readOnly /> Původní začátek · {new Intl.DateTimeFormat("cs-CZ", { day: "numeric", month: "short", year: "numeric" }).format(dateFromKey(item.starts_week))}</label>}
+          </fieldset>}
           <label htmlFor="class-room">Místnost <span className="optional">nepovinné</span></label>
           <input id="class-room" data-testid="input-class-room" value={form.room} onChange={(event) => update("room", event.target.value)} placeholder="např. B-214" />
           {error && <div className="form-alert" role="alert">{error}</div>}
@@ -273,13 +345,14 @@ function ScheduleApp({ userId }: { userId: string }) {
   const { signOut, user } = useAuth();
   const currentMonday = useMemo(() => mondayOf(new Date()), []);
   const [weekStart, setWeekStart] = useState(currentMonday);
-  const [items, setItems] = useState<ScheduleItem[]>([]);
+  const [itemsByOwner, setItemsByOwner] = useState<Record<string, ScheduleItem[]>>({});
+  const [loadErrors, setLoadErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState("");
   const [friends, setFriends] = useState<Profile[]>([]);
   const [friendsLoading, setFriendsLoading] = useState(true);
   const [friendsError, setFriendsError] = useState("");
   const [selectedFriend, setSelectedFriend] = useState<Profile | null>(null);
+  const [compareFriendIds, setCompareFriendIds] = useState<string[]>([]);
   const [friendsDialogOpen, setFriendsDialogOpen] = useState(false);
   const [dialogItem, setDialogItem] = useState<ScheduleItem | null | undefined>(undefined);
   const [signOutError, setSignOutError] = useState("");
@@ -287,6 +360,10 @@ function ScheduleApp({ userId }: { userId: string }) {
   const selectedFriendId = selectedFriend?.user_id ?? null;
   const loadSequence = useRef(0);
   const friendshipSequence = useRef(0);
+  const displayedOwnerIds = useMemo(
+    () => selectedFriendId ? [selectedFriendId] : [userId, ...compareFriendIds],
+    [compareFriendIds, selectedFriendId, userId],
+  );
 
   const loadFriends = useCallback(async () => {
     const sequence = ++friendshipSequence.current;
@@ -298,8 +375,10 @@ function ScheduleApp({ userId }: { userId: string }) {
         const accepted = relationships
           .filter((relationship) => relationship.status === "accepted")
           .map((relationship) => relationship.other);
+        const acceptedIds = new Set(accepted.map((friend) => friend.user_id));
         setFriends(accepted);
         setSelectedFriend((current) => current && !accepted.some((friend) => friend.user_id === current.user_id) ? null : current);
+        setCompareFriendIds((current) => current.filter((friendId) => acceptedIds.has(friendId)));
       }
     } catch (error) {
       if (sequence === friendshipSequence.current) {
@@ -313,32 +392,36 @@ function ScheduleApp({ userId }: { userId: string }) {
   const loadItems = useCallback(async () => {
     const sequence = ++loadSequence.current;
     setLoading(true);
-    setLoadError("");
     try {
-      const result = selectedFriendId
-        ? await listFriendScheduleItems(userId, selectedFriendId)
-        : await listScheduleItems(userId);
-      if (sequence === loadSequence.current) setItems(result);
-    } catch (error) {
+      const results = await Promise.all(displayedOwnerIds.map(async (ownerId) => {
+        try {
+          const scheduleItems = ownerId === userId
+            ? await listScheduleItems(userId)
+            : await listFriendScheduleItems(userId, ownerId);
+          return { ownerId, items: scheduleItems, error: "" };
+        } catch (error) {
+          return { ownerId, items: [], error: friendlyError(error, "Rozvrh se nepodařilo načíst.") };
+        }
+      }));
       if (sequence === loadSequence.current) {
-        setLoadError(friendlyError(error, "Rozvrh se nepodařilo načíst. Zkuste to znovu."));
+        setItemsByOwner(Object.fromEntries(results.map((result) => [result.ownerId, result.items])));
+        setLoadErrors(Object.fromEntries(results.filter((result) => result.error).map((result) => [result.ownerId, result.error])));
       }
     } finally {
       if (sequence === loadSequence.current) setLoading(false);
     }
-  }, [selectedFriendId, userId]);
+  }, [displayedOwnerIds, userId]);
 
   useEffect(() => {
-    setItems([]);
     void loadItems();
     return () => { loadSequence.current += 1; };
   }, [loadItems]);
 
   useEffect(() => {
-    if (!selectedFriendId) return;
+    if (!selectedFriendId && compareFriendIds.length === 0) return;
     const interval = window.setInterval(() => { void loadItems(); }, 30_000);
     return () => window.clearInterval(interval);
-  }, [loadItems, selectedFriendId]);
+  }, [compareFriendIds.length, loadItems, selectedFriendId]);
 
   useEffect(() => {
     void loadFriends();
@@ -349,10 +432,43 @@ function ScheduleApp({ userId }: { userId: string }) {
     };
   }, [loadFriends]);
 
-  const shownItems = useMemo(() => items.filter((item) => {
-    const date = addDays(weekStart, item.day - 1);
-    return date >= weekStart && date <= addDays(weekStart, 6);
-  }), [items, weekStart]);
+  const schedules = useMemo(() => {
+    if (selectedFriend) {
+      return [{
+        userId: selectedFriend.user_id,
+        label: selectedFriend.display_name,
+        isOwn: false,
+        items: itemsByOwner[selectedFriend.user_id] ?? [],
+        error: loadErrors[selectedFriend.user_id],
+      }];
+    }
+    return [
+      {
+        userId,
+        label: "Můj rozvrh",
+        isOwn: true,
+        items: itemsByOwner[userId] ?? [],
+        error: loadErrors[userId],
+      },
+      ...friends
+        .filter((friend) => compareFriendIds.includes(friend.user_id))
+        .map((friend) => ({
+          userId: friend.user_id,
+          label: friend.display_name,
+          isOwn: false,
+          items: itemsByOwner[friend.user_id] ?? [],
+          error: loadErrors[friend.user_id],
+        })),
+    ];
+  }, [compareFriendIds, friends, itemsByOwner, loadErrors, selectedFriend, userId]);
+  const weekSchedules = useMemo(() => schedules.map((schedule) => ({
+    ...schedule,
+    items: schedule.items.filter((item) => item.day >= 1 && item.day <= 5 && isScheduledThisWeek(item, weekStart)),
+  })), [schedules, weekStart]);
+  const shownItems = useMemo(() => weekSchedules.flatMap((schedule) => schedule.items), [weekSchedules]);
+  const hasAnySavedItems = schedules.some((schedule) => schedule.items.some((item) => item.day >= 1 && item.day <= 5));
+  const hasScheduleLoadErrors = schedules.some((schedule) => Boolean(schedule.error));
+  const primaryLoadError = loadErrors[selectedFriendId ?? userId];
 
   const timelineBounds = useMemo(() => {
     const starts = shownItems.map((item) => timeToMinutes(item.start_time));
@@ -365,15 +481,32 @@ function ScheduleApp({ userId }: { userId: string }) {
     () => Array.from({ length: timelineBounds.endHour - timelineBounds.startHour }, (_, index) => timelineBounds.startHour + index),
     [timelineBounds],
   );
-  const timelineColumns = `96px minmax(${Math.max(560, hourMarks.length * 78)}px, 1fr)`;
+  const timelineColumns = `96px 132px minmax(${Math.max(560, hourMarks.length * 78)}px, 1fr)`;
 
   function saveItem(item: ScheduleItem) {
-    setItems((current) => [...current.filter((existing) => existing.id !== item.id), item].sort((a, b) => a.day - b.day || a.start_time.localeCompare(b.start_time)));
+    setItemsByOwner((current) => ({
+      ...current,
+      [userId]: [...(current[userId] ?? []).filter((existing) => existing.id !== item.id), item]
+        .sort((a, b) => a.day - b.day || a.start_time.localeCompare(b.start_time)),
+    }));
     setDialogItem(undefined);
+  }
+
+  function toggleFriendComparison(friendId: string, shouldCompare: boolean) {
+    setSelectedFriend(null);
+    setCompareFriendIds((current) => shouldCompare
+      ? current.includes(friendId) ? current : [...current, friendId]
+      : current.filter((id) => id !== friendId));
+  }
+
+  function openFriendSchedule(friend: Profile) {
+    setCompareFriendIds([]);
+    setSelectedFriend(friend);
   }
 
   const email = user?.email ?? "";
   const initials = email ? email.slice(0, 1).toLocaleUpperCase("cs-CZ") : "S";
+  const isComparing = !selectedFriend && compareFriendIds.length > 0;
 
   return (
     <div className="app-shell">
@@ -396,19 +529,28 @@ function ScheduleApp({ userId }: { userId: string }) {
             {friendsLoading && friends.length === 0 && <div className="sidebar-status" role="status">Načítám přátele…</div>}
             {friendsError && <div className="sidebar-error" role="alert"><span>{friendsError}</span><button type="button" onClick={() => void loadFriends()}>Obnovit</button></div>}
             {!friendsLoading && !friendsError && friends.length === 0 && <div className="sidebar-status">Zatím nemáte žádné přátele.</div>}
-            {friends.map((friend) => (
+            {friends.map((friend) => <div className="sidebar-friend-row" key={friend.user_id}>
+              <label className="friend-compare-control" title={`Porovnat s rozvrhem ${friend.display_name}`}>
+                <input
+                  type="checkbox"
+                  data-testid={`checkbox-compare-friend-${friend.user_id}`}
+                  checked={!selectedFriend && compareFriendIds.includes(friend.user_id)}
+                  onChange={(event) => toggleFriendComparison(friend.user_id, event.target.checked)}
+                  aria-label={`Porovnat rozvrh s ${friend.display_name}`}
+                />
+              </label>
               <button
-                key={friend.user_id}
                 type="button"
                 className={`sidebar-schedule-option friend-option${selectedFriendId === friend.user_id ? " active" : ""}`}
                 data-testid={`button-friend-schedule-${friend.user_id}`}
                 aria-pressed={selectedFriendId === friend.user_id}
-                onClick={() => setSelectedFriend(friend)}
+                onClick={() => openFriendSchedule(friend)}
+                title={`Zobrazit pouze rozvrh uživatele ${friend.display_name}`}
               >
                 <span className="friend-avatar" aria-hidden="true">{friend.display_name.slice(0, 1).toLocaleUpperCase("cs-CZ")}</span>
                 <span className="sidebar-option-copy"><strong>{friend.display_name}</strong><small>@{friend.username}</small></span>
               </button>
-            ))}
+            </div>)}
             <button type="button" data-testid="button-open-friends" className="sidebar-manage-button" onClick={() => setFriendsDialogOpen(true)}>
               <Users size={16} /><span>Spravovat přátele</span>
             </button>
@@ -417,9 +559,10 @@ function ScheduleApp({ userId }: { userId: string }) {
         <main className="schedule-main">
         <section className={`schedule-intro${selectedFriend ? " friend-view-intro" : ""}`}>
           <div>
-            <p className="eyebrow">{selectedFriend ? "SDÍLENÝ ROZVRH" : "OSOBNÍ ROZVRH"}</p>
-            <h1>{selectedFriend ? `Rozvrh ${selectedFriend.display_name}` : <>Váš týden<span>.</span></>}</h1>
+            <p className="eyebrow">{selectedFriend ? "SDÍLENÝ ROZVRH" : isComparing ? "SROVNÁNÍ ROZVRHŮ" : "OSOBNÍ ROZVRH"}</p>
+            <h1>{selectedFriend ? `Rozvrh ${selectedFriend.display_name}` : isComparing ? <>Porovnání<span>.</span></> : <>Váš týden<span>.</span></>}</h1>
             {selectedFriend && <p className="friend-subtitle">@{selectedFriend.username} · sdílí s vámi svůj rozvrh</p>}
+            {isComparing && <p className="friend-subtitle">Váš rozvrh a vybraní přátelé, seřazení po dnech.</p>}
           </div>
           <div className="intro-actions">
             <span className="user-avatar" title={email}>{initials}</span>
@@ -439,14 +582,14 @@ function ScheduleApp({ userId }: { userId: string }) {
         {signOutError && <div className="form-alert page-alert" role="alert">{signOutError}</div>}
         {loading ? (
           <div className="timeline-loading" aria-label="Načítám rozvrh"><div className="skeleton-timeline-row" /><div className="skeleton-timeline-row" /><div className="skeleton-timeline-row" /></div>
-        ) : loadError ? (
-          <section className="state-panel error-state"><div className="state-icon"><CalendarDays size={23} /></div><h2>Rozvrh se nepodařilo načíst</h2><p>{loadError}</p><button type="button" className="button button-soft" data-testid="button-retry-load" onClick={loadItems}>Zkusit znovu</button></section>
-        ) : items.length === 0 ? (
+        ) : primaryLoadError ? (
+          <section className="state-panel error-state"><div className="state-icon"><CalendarDays size={23} /></div><h2>Rozvrh se nepodařilo načíst</h2><p>{primaryLoadError}</p><button type="button" className="button button-soft" data-testid="button-retry-load" onClick={loadItems}>Zkusit znovu</button></section>
+        ) : !hasAnySavedItems && !hasScheduleLoadErrors ? (
           <section className="empty-panel">
             <div className="empty-illustration"><div className="empty-paper"><span /><span /><span /></div><div className="empty-orbit"><Plus size={18} /></div></div>
-            <p className="eyebrow">{selectedFriend ? "SDÍLENÝ ROZVRH" : "TÝDEN JE ZATÍM VOLNÝ"}</p>
-            <h2>{selectedFriend ? "Tento rozvrh je zatím prázdný." : "Začněte první hodinou."}</h2>
-            <p>{selectedFriend ? `${selectedFriend.display_name} zatím nemá přidané žádné hodiny.` : "Přidejte předmět a čas výuky. Váš rozvrh zůstává soukromý."}</p>
+            <p className="eyebrow">{selectedFriend ? "SDÍLENÝ ROZVRH" : isComparing ? "VYBRANÉ ROZVRHY" : "TÝDEN JE ZATÍM VOLNÝ"}</p>
+            <h2>{selectedFriend ? "Tento rozvrh je zatím prázdný." : isComparing ? "Zatím tu nejsou žádné hodiny." : "Začněte první hodinou."}</h2>
+            <p>{selectedFriend ? `${selectedFriend.display_name} zatím nemá přidané žádné hodiny.` : isComparing ? "Ve vašem ani vybraných rozvrzích zatím nejsou přidané hodiny." : "Přidejte předmět a čas výuky. Váš rozvrh zůstává soukromý."}</p>
             {!selectedFriend && <button type="button" className="button button-primary" data-testid="button-empty-add" onClick={() => setDialogItem(null)}><Plus size={17} /> Přidat první výuku</button>}
           </section>
         ) : (
@@ -455,46 +598,56 @@ function ScheduleApp({ userId }: { userId: string }) {
               <div className="timeline-table">
                 <div className="timeline-header" style={{ gridTemplateColumns: timelineColumns }}>
                   <div className="timeline-day-label timeline-corner">DEN</div>
+                  <div className="timeline-owner-header">ROZVRH</div>
                   <div className="timeline-hours" style={{ gridTemplateColumns: `repeat(${hourMarks.length}, minmax(78px, 1fr))` }}>
                     {hourMarks.map((hour) => <span key={hour}>{String(hour).padStart(2, "0")}:00</span>)}
                   </div>
                 </div>
               {weekdays.map((day, index) => {
                 const dayDate = addDays(weekStart, index);
-                const dayItems = shownItems.filter((item) => item.day === index + 1);
-                const layout = arrangeDayItems(dayItems, timelineBounds.start, timelineBounds.end);
                 const isToday = dayDate.toDateString() === new Date().toDateString();
-                return <div key={day} className="timeline-row" style={{ gridTemplateColumns: timelineColumns }}>
-                  <div className={`timeline-day-label ${isToday ? "is-today" : ""}`}><span>{day}</span><b>{dayDate.getDate()}</b></div>
-                  <div className="timeline-track" style={{ height: `${Math.max(72, layout.laneCount * 50 + 16)}px` }}>
-                    {hourMarks.map((hour) => <i key={hour} className="timeline-gridline" style={{ left: `${((hour * 60 - timelineBounds.start) / (timelineBounds.end - timelineBounds.start)) * 100}%` }} />)}
-                    {dayItems.length === 0 && <span className="timeline-empty">Volno</span>}
-                    {layout.events.map(({ item, lane, left, width }, itemIndex) => {
-                      const eventClass = `timeline-event class-color-${(index + itemIndex) % 4}`;
-                      const eventStyle = { left: `${left}%`, width: `${width}%`, top: `${8 + lane * 50}px` };
-                      const eventLabel = `${item.title}, ${item.type}, ${item.start_time.slice(0, 5)}–${item.end_time.slice(0, 5)}${item.room ? `, místnost ${item.room}` : ""}`;
-                      const eventContent = <>
-                        <span className="timeline-event-time">{item.start_time.slice(0, 5)}–{item.end_time.slice(0, 5)}</span>
-                        <strong className="timeline-event-title">{item.title}</strong>
-                        <span className="timeline-event-details">{item.type}{item.room ? ` · ${item.room}` : ""}</span>
-                        {!selectedFriend && <Pencil className="timeline-event-edit-icon" size={11} aria-hidden="true" />}
-                      </>;
-                      return selectedFriend
-                        ? <article className={eventClass} key={item.id} data-testid={`card-schedule-item-${item.id}`} style={eventStyle} title={eventLabel} aria-label={eventLabel}>{eventContent}</article>
-                        : <button type="button" className={eventClass} key={item.id} data-testid={`card-schedule-item-${item.id}`} style={eventStyle} title={eventLabel} aria-label={`Upravit: ${eventLabel}`} onClick={() => setDialogItem(item)}>{eventContent}</button>;
-                    })}
-                  </div>
+                const daySchedules = weekSchedules.map((schedule, scheduleIndex) => {
+                  const dayItems = schedule.items.filter((item) => item.day === index + 1);
+                  return {
+                    ...schedule,
+                    dayItems,
+                    scheduleIndex,
+                    layout: arrangeDayItems(dayItems, timelineBounds.start, timelineBounds.end),
+                  };
+                });
+                return <div key={day} className="timeline-day-group" style={{ gridTemplateColumns: timelineColumns }}>
+                  <div className={`timeline-day-label ${isToday ? "is-today" : ""}`} style={{ gridRow: `span ${daySchedules.length}` }}><span>{day}</span><b>{dayDate.getDate()}</b></div>
+                  {daySchedules.map((schedule) => <Fragment key={`${day}-${schedule.userId}`}>
+                    <div className="timeline-owner-label" title={schedule.label}>{schedule.isOwn ? "Vy" : schedule.label}</div>
+                    <div className="timeline-track" style={{ height: `${Math.max(56, schedule.layout.laneCount * 48 + 8)}px` }}>
+                      {hourMarks.map((hour) => <i key={hour} className="timeline-gridline" style={{ left: `${((hour * 60 - timelineBounds.start) / (timelineBounds.end - timelineBounds.start)) * 100}%` }} />)}
+                      {schedule.error ? <span className="timeline-empty timeline-track-error" title={schedule.error}>Nelze načíst</span> : schedule.dayItems.length === 0 ? <span className="timeline-empty">Volno</span> : schedule.layout.events.map(({ item, lane, left, width }, itemIndex) => {
+                        const eventClass = `timeline-event class-color-${(index + schedule.scheduleIndex + itemIndex) % 4}`;
+                        const eventStyle = { left: `${left}%`, width: `${width}%`, top: `${4 + lane * 48}px` };
+                        const eventLabel = `${item.title}, ${item.type}, ${item.start_time.slice(0, 5)}–${item.end_time.slice(0, 5)}${item.room ? `, místnost ${item.room}` : ""}`;
+                        const eventContent = <>
+                          <span className="timeline-event-time">{item.start_time.slice(0, 5)}–{item.end_time.slice(0, 5)}</span>
+                          <strong className="timeline-event-title">{item.title}</strong>
+                          <span className="timeline-event-details">{item.type}{item.room ? ` · ${item.room}` : ""}</span>
+                          {schedule.isOwn && <Pencil className="timeline-event-edit-icon" size={11} aria-hidden="true" />}
+                        </>;
+                        return schedule.isOwn
+                          ? <button type="button" className={eventClass} key={item.id} data-testid={`card-schedule-item-${item.id}`} style={eventStyle} title={eventLabel} aria-label={`Upravit: ${eventLabel}`} onClick={() => setDialogItem(item)}>{eventContent}</button>
+                          : <article className={eventClass} key={item.id} data-testid={`card-schedule-item-${item.id}`} style={eventStyle} title={eventLabel} aria-label={eventLabel}>{eventContent}</article>;
+                      })}
+                    </div>
+                  </Fragment>)}
                 </div>;
               })}
               </div>
             </section>
-            <div className="schedule-foot"><span><BookOpen size={14} /> {items.length} {items.length === 1 ? "předmět" : items.length < 5 ? "předměty" : "předmětů"} v rozvrhu</span><span>Časy jsou v místním čase</span></div>
+            <div className="schedule-foot"><span><BookOpen size={14} /> Výuky v zobrazených rozvrzích: {shownItems.length}</span><span>Časy jsou v místním čase</span></div>
           </>
         )}
         </main>
       </div>
-      {dialogItem !== undefined && <ScheduleForm item={dialogItem} userId={userId} onClose={() => setDialogItem(undefined)} onSaved={saveItem} onDeleted={(id) => { setItems((current) => current.filter((item) => item.id !== id)); setDialogItem(undefined); }} />}
-      {friendsDialogOpen && <FriendsDialog userId={userId} onClose={() => { setFriendsDialogOpen(false); void loadFriends(); }} onSelectFriend={(profile) => { setSelectedFriend(profile); setFriendsDialogOpen(false); void loadFriends(); }} onFriendshipRemoved={(friendId) => { if (selectedFriendId === friendId) setSelectedFriend(null); void loadFriends(); }} />}
+      {dialogItem !== undefined && <ScheduleForm item={dialogItem} userId={userId} onClose={() => setDialogItem(undefined)} onSaved={saveItem} onDeleted={(id) => { setItemsByOwner((current) => ({ ...current, [userId]: (current[userId] ?? []).filter((item) => item.id !== id) })); setDialogItem(undefined); }} />}
+      {friendsDialogOpen && <FriendsDialog userId={userId} onClose={() => { setFriendsDialogOpen(false); void loadFriends(); }} onSelectFriend={(profile) => { openFriendSchedule(profile); setFriendsDialogOpen(false); void loadFriends(); }} onFriendshipRemoved={(friendId) => { if (selectedFriendId === friendId) setSelectedFriend(null); setCompareFriendIds((current) => current.filter((id) => id !== friendId)); void loadFriends(); }} />}
     </div>
   );
 }

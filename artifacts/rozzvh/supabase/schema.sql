@@ -89,9 +89,40 @@ create table if not exists public.schedule_items (
   end_time time without time zone not null,
   room text,
   type text not null check (length(trim(type)) > 0),
+  repeat_every_two_weeks boolean not null default false,
+  starts_week date,
   created_at timestamptz not null default now(),
-  constraint schedule_items_end_after_start check (end_time > start_time)
+  constraint schedule_items_end_after_start check (end_time > start_time),
+  constraint schedule_items_biweekly_start_check check (
+    (repeat_every_two_weeks = false and starts_week is null)
+    or (
+      repeat_every_two_weeks = true
+      and starts_week is not null
+      and extract(isodow from starts_week) = 1
+    )
+  )
 );
+
+alter table public.schedule_items
+  add column if not exists repeat_every_two_weeks boolean not null default false;
+alter table public.schedule_items
+  add column if not exists starts_week date;
+alter table public.schedule_items
+  drop constraint if exists schedule_items_biweekly_start_check;
+alter table public.schedule_items
+  add constraint schedule_items_biweekly_start_check check (
+    (repeat_every_two_weeks = false and starts_week is null)
+    or (
+      repeat_every_two_weeks = true
+      and starts_week is not null
+      and extract(isodow from starts_week) = 1
+    )
+  );
+alter table public.schedule_items
+  drop constraint if exists schedule_items_weekdays_only_check;
+alter table public.schedule_items
+  add constraint schedule_items_weekdays_only_check
+  check (day between 1 and 5) not valid;
 
 create index if not exists schedule_items_user_day_time_idx
   on public.schedule_items (user_id, day, start_time);

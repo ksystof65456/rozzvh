@@ -8,7 +8,7 @@
 2. V Supabase Authentication nastavte adresu aplikace jako **Site URL** a povolenou **Redirect URL**. Pro GitHub Pages bude mít tvar `https://<účet>.github.io/rozzvh/`.
 3. Pro lokální vývoj zkopírujte `.env.example` do `.env.local` a vyplňte `VITE_SUPABASE_URL` a veřejný `VITE_SUPABASE_ANON_KEY` (případně publishable key). Nikdy nepoužívejte `service_role` klíč v klientské aplikaci.
 
-Tabulka `schedule_items` používá dny 1–7 (pondělí–neděle), ukládá čas jako místní čas bez časového pásma a odmítne konec výuky před nebo ve stejnou dobu jako začátek. Rozvrh jiného uživatele lze číst pouze po přijetí žádosti o přátelství; čekající nebo odmítnuté žádosti přístup neposkytují.
+Rozhraní rozvrhu používá pracovní dny pondělí–pátek a ukládá čas jako místní čas bez časového pásma. Výuka může být týdenní nebo se opakovat každé dva týdny od zvoleného pondělí (`starts_week`). Starší víkendové záznamy zůstávají v databázi zachované, ale aplikace je nezobrazuje a nové už nelze přidat. Rozvrh jiného uživatele lze číst pouze po přijetí žádosti o přátelství; čekající nebo odmítnuté žádosti přístup neposkytují.
 
 Skript také vytvoří profily s jedinečnými uživatelskými jmény, vyhledávání přesné shody bez zveřejnění e-mailu a tabulku žádostí o přátelství. Existující účty dostanou při migraci automatické jméno ve tvaru `student_…`, které lze upravit v aplikaci. Po změně tohoto skriptu jej celý znovu spusťte v Supabase SQL Editoru.
 
