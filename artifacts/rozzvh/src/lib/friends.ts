@@ -5,6 +5,8 @@ export type Profile = {
   user_id: string;
   username: string;
   display_name: string;
+  avatar_path: string | null;
+  avatar_url?: string | null;
 };
 
 export type FriendshipStatus = "pending" | "accepted";
@@ -29,8 +31,23 @@ type FriendshipRow = {
   accepted_at: string | null;
 };
 
-const profileColumns = "user_id, username, display_name";
+const profileColumns = "user_id, username, display_name, avatar_path";
 const usernamePattern = /^[a-z0-9_]{3,24}$/;
+
+async function attachAvatarUrl(profile: Profile): Promise<Profile> {
+  profile.avatar_url = profile.avatar_path
+    ? await getProfileAvatarUrl(profile.avatar_path)
+    : null;
+  return profile;
+}
+
+export async function getProfileAvatarUrl(path: string): Promise<string | null> {
+  const { data, error } = await requireSupabaseClient()
+    .storage.from("avatars")
+    .createSignedUrl(path, 60 * 60);
+  if (error) return null;
+  return data.signedUrl;
+}
 
 export function normalizeUsername(value: string): string {
   return value.trim().replace(/^@/, "").toLocaleLowerCase("en-US");
@@ -45,7 +62,7 @@ async function loadOwnProfile(userId: string): Promise<Profile> {
     .single();
 
   if (error) throw error;
-  return data as Profile;
+  return attachAvatarUrl(data as Profile);
 }
 
 export async function getOwnProfile(userId: string): Promise<Profile> {
@@ -70,7 +87,7 @@ export async function checkUsernameAvailability(
 
 export async function updateOwnProfile(
   userId: string,
-  input: Pick<Profile, "username" | "display_name">,
+  input: Pick<Profile, "username" | "display_name"> & Partial<Pick<Profile, "avatar_path">>,
 ): Promise<Profile> {
   await requireVerifiedUser(userId);
   const username = normalizeUsername(input.username);
@@ -88,13 +105,13 @@ export async function updateOwnProfile(
 
   const { data, error } = await requireSupabaseClient()
     .from("profiles")
-    .update({ username, display_name: displayName })
+    .update({ username, display_name: displayName, ...(input.avatar_path !== undefined ? { avatar_path: input.avatar_path } : {}) })
     .eq("user_id", userId)
     .select(profileColumns)
     .single();
 
   if (error) throw error;
-  return data as Profile;
+  return attachAvatarUrl(data as Profile);
 }
 
 export async function searchProfiles(
@@ -112,7 +129,7 @@ export async function searchProfiles(
     { search_username: username },
   );
   if (error) throw error;
-  return (data ?? []) as Profile[];
+  return Promise.all(((data ?? []) as Profile[]).map(attachAvatarUrl));
 }
 
 export async function listFriendships(
@@ -140,9 +157,8 @@ export async function listFriendships(
     .in("user_id", otherIds);
 
   if (profilesError) throw profilesError;
-  const profiles = new Map(
-    ((profilesData ?? []) as Profile[]).map((profile) => [profile.user_id, profile]),
-  );
+  const hydratedProfiles = await Promise.all(((profilesData ?? []) as Profile[]).map(attachAvatarUrl));
+  const profiles = new Map(hydratedProfiles.map((profile) => [profile.user_id, profile]));
 
   return rows.map((row) => {
     const otherId = row.user_id === userId ? row.friend_id : row.user_id;

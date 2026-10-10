@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react';
-import { Check, Clock3, RefreshCw, Search, Send, UserRoundPlus, UsersRound, X } from 'lucide-react';
+import { useEffect, useState, type ChangeEvent, type ReactNode } from 'react';
+import { Check, Clock3, ImagePlus, RefreshCw, Search, Send, Trash2, UserRoundPlus, UsersRound, X } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { Form } from '@/components/ui/form';
 import {
@@ -13,6 +13,8 @@ import {
   searchProfiles,
   updateOwnProfile,
 } from '@/lib/friends';
+import { uploadProfilePhoto, removeProfilePhoto } from '@/lib/profile-photos';
+import { ProfileAvatar } from '@/components/profile-avatar';
 
 type FriendsDialogProps = {
   userId: string;
@@ -32,7 +34,7 @@ function errorMessage(error: unknown) {
   if (/friendships_unique_pair_idx|duplicate key/i.test(text)) {
     return 'Mezi těmito účty už čeká žádost nebo jsou přátelé.';
   }
-  if (/profiles|friendships|search_profiles|username_available|schema cache/i.test(text)
+  if (/profiles|friendships|search_profiles|username_available|avatar_path|avatars|schema cache/i.test(text)
     && /does not exist|not found|schema cache|permission|relation|column/i.test(text)) {
     return 'Databáze pro přátele není připravená. Spusťte aktuální soubor supabase/schema.sql v Supabase SQL Editoru.';
   }
@@ -57,6 +59,7 @@ export function FriendsDialog({ userId, onClose, onSelectFriend, onFriendshipRem
   const [searchResults, setSearchResults] = useState<Profile[] | null>(null);
   const [searchError, setSearchError] = useState('');
   const [removeId, setRemoveId] = useState<string | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
 
   const profileForm = useForm<ProfileFields>({
     defaultValues: { username: '', display_name: '' },
@@ -130,6 +133,34 @@ export function FriendsDialog({ userId, onClose, onSelectFriend, onFriendshipRem
       setActionError(errorMessage(error));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function changePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    setPhotoBusy(true);
+    setActionError('');
+    try {
+      setProfile(await uploadProfilePhoto(userId, file));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setPhotoBusy(false);
+    }
+  }
+
+  async function deletePhoto() {
+    if (!profile) return;
+    setPhotoBusy(true);
+    setActionError('');
+    try {
+      setProfile(await removeProfilePhoto(userId, profile.avatar_path));
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setPhotoBusy(false);
     }
   }
 
@@ -211,6 +242,20 @@ export function FriendsDialog({ userId, onClose, onSelectFriend, onFriendshipRem
               <div className="friends-skeleton" role="status" aria-label="Načítání profilu"><i /><i /><i /></div>
             ) : profile ? (
               <>
+                <div className="friends-profile-photo">
+                  <ProfileAvatar profile={profile} className="profile-avatar profile-avatar-large" />
+                  <div>
+                    <strong>Profilová fotka</strong>
+                    <p>JPG, PNG nebo WebP · nejvýše 5 MB</p>
+                    <div className="friends-photo-actions">
+                      <label className={`button button-soft friends-photo-button${photoBusy ? ' is-disabled' : ''}`}>
+                        <ImagePlus size={14} /> {photoBusy ? 'Ukládám…' : profile.avatar_path ? 'Změnit fotku' : 'Nahrát fotku'}
+                        <input type="file" accept="image/jpeg,image/png,image/webp" disabled={photoBusy} onChange={(event) => void changePhoto(event)} />
+                      </label>
+                      {profile.avatar_path && <button type="button" className="button button-quiet-danger friends-photo-remove" disabled={photoBusy} onClick={() => void deletePhoto()}><Trash2 size={13} /> Odebrat</button>}
+                    </div>
+                  </div>
+                </div>
                 <div className="friends-share-handle" data-testid="text-own-username">
                   <span>Vaše adresa</span>
                   <strong>@{profile.username}</strong>
@@ -276,7 +321,7 @@ export function FriendsDialog({ userId, onClose, onSelectFriend, onFriendshipRem
                     : relationship?.direction === 'incoming' ? 'Příchozí žádost' : 'Žádost odeslána';
                   return (
                     <div className="friends-person-row" key={result.user_id} data-testid={`search-result-${result.user_id}`}>
-                      <PersonMark name={result.display_name} />
+                      <ProfileAvatar profile={result} className="friends-person-mark profile-avatar" />
                       <div className="friends-person-copy"><strong>{result.display_name}</strong><span>@{result.username}</span></div>
                       <button
                         className="button button-primary friends-row-action"
@@ -402,11 +447,6 @@ function FormSearch({
   );
 }
 
-function PersonMark({ name }: { name: string }) {
-  const initials = name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toLocaleUpperCase('cs');
-  return <span className="friends-person-mark" aria-hidden="true">{initials || '•'}</span>;
-}
-
 function ConnectionGroup({
   title,
   empty,
@@ -425,7 +465,7 @@ function ConnectionGroup({
       <h4>{title}<span>{entries.length}</span></h4>
       {entries.length ? entries.map((entry) => (
         <div className="friends-person-row" key={entry.id} data-testid={`connection-${entry.id}`}>
-          <PersonMark name={entry.other.display_name} />
+          <ProfileAvatar profile={entry.other} className="friends-person-mark profile-avatar" />
           <div className="friends-person-copy"><strong>{entry.other.display_name}</strong><span>@{entry.other.username}</span></div>
           <div className="friends-row-actions">{renderActions(entry)}</div>
         </div>

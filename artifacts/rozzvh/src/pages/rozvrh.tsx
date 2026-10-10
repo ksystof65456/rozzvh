@@ -1,9 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, BookOpen, CalendarDays, Check, ChevronDown, LoaderCircle, LogOut, Pencil, Plus, Trash2, Users, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CalendarClock, CalendarDays, Check, ChevronDown, LoaderCircle, LogOut, Pencil, Plus, Trash2, Users, X } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { isSupabaseConfigured } from "@/lib/supabase";
 import { createScheduleItem, deleteScheduleItem, listFriendScheduleItems, listScheduleItems, updateScheduleItem, type ScheduleItem, type ScheduleItemInput } from "@/lib/schedule";
 import { FriendsDialog } from "@/components/friends-dialog";
+import FriendEventsDialog from "@/components/friend-events-dialog";
+import { ProfileAvatar } from "@/components/profile-avatar";
 import { listFriendships, type Profile } from "@/lib/friends";
 
 const weekdays = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek"];
@@ -354,6 +356,7 @@ function ScheduleApp({ userId }: { userId: string }) {
   const [selectedFriend, setSelectedFriend] = useState<Profile | null>(null);
   const [compareFriendIds, setCompareFriendIds] = useState<string[]>([]);
   const [friendsDialogOpen, setFriendsDialogOpen] = useState(false);
+  const [friendEventsDialogOpen, setFriendEventsDialogOpen] = useState(false);
   const [dialogItem, setDialogItem] = useState<ScheduleItem | null | undefined>(undefined);
   const [signOutError, setSignOutError] = useState("");
   const isCurrentWeek = weekStart.getTime() === currentMonday.getTime();
@@ -547,12 +550,15 @@ function ScheduleApp({ userId }: { userId: string }) {
                 onClick={() => openFriendSchedule(friend)}
                 title={`Zobrazit pouze rozvrh uživatele ${friend.display_name}`}
               >
-                <span className="friend-avatar" aria-hidden="true">{friend.display_name.slice(0, 1).toLocaleUpperCase("cs-CZ")}</span>
+                <ProfileAvatar profile={friend} className="friend-avatar profile-avatar" />
                 <span className="sidebar-option-copy"><strong>{friend.display_name}</strong><small>@{friend.username}</small></span>
               </button>
             </div>)}
-            <button type="button" data-testid="button-open-friends" className="sidebar-manage-button" onClick={() => setFriendsDialogOpen(true)}>
+            <button type="button" data-testid="button-open-friends" aria-label="Spravovat přátele" className="sidebar-manage-button" onClick={() => setFriendsDialogOpen(true)}>
               <Users size={16} /><span>Spravovat přátele</span>
+            </button>
+            <button type="button" data-testid="button-open-friend-events" aria-label="Domluvit jednorázové setkání s přítelem" className="sidebar-manage-button sidebar-events-button" onClick={() => setFriendEventsDialogOpen(true)}>
+              <CalendarClock size={16} /><span>Domluvit setkání</span>
             </button>
           </div>
         </aside>
@@ -648,6 +654,7 @@ function ScheduleApp({ userId }: { userId: string }) {
       </div>
       {dialogItem !== undefined && <ScheduleForm item={dialogItem} userId={userId} onClose={() => setDialogItem(undefined)} onSaved={saveItem} onDeleted={(id) => { setItemsByOwner((current) => ({ ...current, [userId]: (current[userId] ?? []).filter((item) => item.id !== id) })); setDialogItem(undefined); }} />}
       {friendsDialogOpen && <FriendsDialog userId={userId} onClose={() => { setFriendsDialogOpen(false); void loadFriends(); }} onSelectFriend={(profile) => { openFriendSchedule(profile); setFriendsDialogOpen(false); void loadFriends(); }} onFriendshipRemoved={(friendId) => { if (selectedFriendId === friendId) setSelectedFriend(null); setCompareFriendIds((current) => current.filter((id) => id !== friendId)); void loadFriends(); }} />}
+      {friendEventsDialogOpen && <FriendEventsDialog userId={userId} friends={friends} onClose={() => setFriendEventsDialogOpen(false)} />}
     </div>
   );
 }

@@ -4,7 +4,7 @@
 
 ## Supabase
 
-1. V Supabase otevřete **SQL Editor** a spusťte celý soubor [`supabase/schema.sql`](./supabase/schema.sql).
+1. V Supabase otevřete **SQL Editor** a spusťte celý soubor [`supabase/schema.sql`](./supabase/schema.sql). Skript nastaví profily a přátele, soukromé profilové fotky v bucketu `avatars` i žádosti o jednorázová setkání.
 2. V Supabase Authentication nastavte adresu aplikace jako **Site URL** a povolenou **Redirect URL**. Pro GitHub Pages bude mít tvar `https://<účet>.github.io/rozzvh/`.
 3. Pro lokální vývoj zkopírujte `.env.example` do `.env.local` a vyplňte `VITE_SUPABASE_URL` a veřejný `VITE_SUPABASE_ANON_KEY` (případně publishable key). Nikdy nepoužívejte `service_role` klíč v klientské aplikaci.
 

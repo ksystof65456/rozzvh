@@ -8,6 +8,7 @@ create table if not exists public.profiles (
   user_id uuid primary key references auth.users (id) on delete cascade,
   username text not null,
   display_name text not null,
+  avatar_path text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint profiles_username_format check (
@@ -18,6 +19,9 @@ create table if not exists public.profiles (
     length(trim(display_name)) between 1 and 40
   )
 );
+
+alter table public.profiles
+  add column if not exists avatar_path text;
 
 create unique index if not exists profiles_username_unique_idx
   on public.profiles (username);
@@ -301,16 +305,17 @@ create policy profiles_update_own
 
 grant select on public.profiles to authenticated;
 revoke update on public.profiles from authenticated;
-grant update (username, display_name) on public.profiles to authenticated;
+grant update (username, display_name, avatar_path) on public.profiles to authenticated;
 
+drop function if exists public.search_profiles(text);
 create or replace function public.search_profiles(search_username text)
-returns table (user_id uuid, username text, display_name text)
+returns table (user_id uuid, username text, display_name text, avatar_path text)
 language sql
 stable
 security definer
 set search_path = public, pg_temp
 as $$
-  select p.user_id, p.username, p.display_name
+  select p.user_id, p.username, p.display_name, p.avatar_path
   from public.profiles as p
   where auth.uid() is not null
     and p.user_id <> auth.uid()
@@ -367,3 +372,211 @@ grant select, insert, update, delete
   on public.schedule_items to authenticated;
 grant select, insert, update, delete
   on public.friendships to authenticated;
+
+-- Private avatar files; signed URLs are issued only to the owner or an accepted friend.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'avatars',
+  'avatars',
+  false,
+  5242880,
+  array['image/jpeg', 'image/png', 'image/webp']
+)
+on conflict (id) do update
+set public = false,
+    file_size_limit = 5242880,
+    allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+
+drop policy if exists avatars_read_self_or_accepted_friends on storage.objects;
+create policy avatars_read_self_or_accepted_friends
+  on storage.objects
+  for select
+  to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (
+      (storage.foldername(name))[1] = (select auth.uid())::text
+      or exists (
+        select 1
+        from public.friendships as f
+        where f.status = 'accepted'
+          and f.accepted_at is not null
+          and (
+            (
+              f.user_id = (select auth.uid())
+              and f.friend_id::text = (storage.foldername(name))[1]
+            )
+            or (
+              f.friend_id = (select auth.uid())
+              and f.user_id::text = (storage.foldername(name))[1]
+            )
+          )
+      )
+    )
+  );
+
+drop policy if exists avatars_insert_own on storage.objects;
+create policy avatars_insert_own
+  on storage.objects
+  for insert
+  to authenticated
+  with check (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+drop policy if exists avatars_update_own on storage.objects;
+create policy avatars_update_own
+  on storage.objects
+  for update
+  to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  )
+  with check (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+drop policy if exists avatars_delete_own on storage.objects;
+create policy avatars_delete_own
+  on storage.objects
+  for delete
+  to authenticated
+  using (
+    bucket_id = 'avatars'
+    and (storage.foldername(name))[1] = (select auth.uid())::text
+  );
+
+-- A one-time activity is visible only to its two participants while their
+-- friendship is accepted. Responses update status without changing the proposal.
+create table if not exists public.friend_events (
+  id uuid primary key default gen_random_uuid(),
+  proposer_id uuid not null references auth.users (id) on delete cascade,
+  invitee_id uuid not null references auth.users (id) on delete cascade,
+  title text not null check (length(trim(title)) between 1 and 80),
+  description text check (description is null or length(description) <= 240),
+  event_type text not null check (event_type in ('lunch', 'phone_call', 'other')),
+  starts_at timestamptz not null,
+  status text not null default 'proposed'
+    check (status in ('proposed', 'accepted', 'declined', 'cancelled')),
+  created_at timestamptz not null default now(),
+  responded_at timestamptz,
+  constraint friend_events_no_self_invite check (proposer_id <> invitee_id),
+  constraint friend_events_response_timestamp check (
+    (status in ('accepted', 'declined', 'cancelled') and responded_at is not null)
+    or (status = 'proposed' and responded_at is null)
+  )
+);
+
+create index if not exists friend_events_proposer_time_idx
+  on public.friend_events (proposer_id, starts_at);
+create index if not exists friend_events_invitee_time_idx
+  on public.friend_events (invitee_id, starts_at);
+
+alter table public.friend_events enable row level security;
+
+drop policy if exists friend_events_select_participants on public.friend_events;
+create policy friend_events_select_participants
+  on public.friend_events
+  for select
+  to authenticated
+  using (
+    (
+      proposer_id = (select auth.uid())
+      or invitee_id = (select auth.uid())
+    )
+    and exists (
+      select 1
+      from public.friendships as f
+      where f.status = 'accepted'
+        and f.accepted_at is not null
+        and (
+          (f.user_id = friend_events.proposer_id and f.friend_id = friend_events.invitee_id)
+          or (f.friend_id = friend_events.proposer_id and f.user_id = friend_events.invitee_id)
+        )
+    )
+  );
+
+drop policy if exists friend_events_insert_proposal on public.friend_events;
+create policy friend_events_insert_proposal
+  on public.friend_events
+  for insert
+  to authenticated
+  with check (
+    proposer_id = (select auth.uid())
+    and status = 'proposed'
+    and responded_at is null
+    and exists (
+      select 1
+      from public.friendships as f
+      where f.status = 'accepted'
+        and f.accepted_at is not null
+        and (
+          (f.user_id = proposer_id and f.friend_id = invitee_id)
+          or (f.friend_id = proposer_id and f.user_id = invitee_id)
+        )
+    )
+  );
+
+create or replace function public.guard_friend_event_update()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+begin
+  if new.id is distinct from old.id
+    or new.proposer_id is distinct from old.proposer_id
+    or new.invitee_id is distinct from old.invitee_id
+    or new.title is distinct from old.title
+    or new.description is distinct from old.description
+    or new.event_type is distinct from old.event_type
+    or new.starts_at is distinct from old.starts_at
+    or new.created_at is distinct from old.created_at then
+    raise exception 'Event details cannot be changed after a proposal is sent.';
+  end if;
+
+  if old.status = 'proposed'
+    and auth.uid() = old.invitee_id
+    and new.status in ('accepted', 'declined') then
+    new.responded_at := now();
+    return new;
+  end if;
+
+  if old.status in ('proposed', 'accepted')
+    and new.status = 'cancelled'
+    and auth.uid() in (old.proposer_id, old.invitee_id) then
+    new.responded_at := now();
+    return new;
+  end if;
+
+  raise exception 'This event cannot be changed by this user.';
+end;
+$$;
+
+drop trigger if exists friend_events_guard_update on public.friend_events;
+create trigger friend_events_guard_update
+  before update on public.friend_events
+  for each row execute function public.guard_friend_event_update();
+
+drop policy if exists friend_events_update_participants on public.friend_events;
+create policy friend_events_update_participants
+  on public.friend_events
+  for update
+  to authenticated
+  using (
+    (
+      invitee_id = (select auth.uid()) and status = 'proposed'
+    )
+    or (
+      (proposer_id = (select auth.uid()) or invitee_id = (select auth.uid()))
+      and status in ('proposed', 'accepted')
+    )
+  )
+  with check (
+    (proposer_id = (select auth.uid()) or invitee_id = (select auth.uid()))
+    and status in ('accepted', 'declined', 'cancelled')
+  );
+
+grant select, insert, update on public.friend_events to authenticated;

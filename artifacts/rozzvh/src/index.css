@@ -296,6 +296,20 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .sidebar-option-copy strong { overflow:hidden; color:#3b5545; font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .sidebar-option-copy small { overflow:hidden; color:#8a978c; font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .friend-avatar { border-radius:50%; background:#e8e9d9; color:#7c704b; font-size:11px; font-weight:700; }
+.friend-avatar img,.friends-person-mark img,.profile-avatar img { width:100%; height:100%; display:block; border-radius:inherit; object-fit:cover; }
+.profile-avatar { overflow:hidden; }
+.profile-avatar-large { width:56px; height:56px; flex:0 0 56px; display:grid; place-items:center; border-radius:50%; background:#e8e9d9; color:#55735f; font-size:18px; font-weight:700; }
+.friends-profile-photo { display:flex; align-items:center; gap:13px; margin:16px 0 12px; }
+.friends-profile-photo > div:last-child { min-width:0; }
+.friends-profile-photo strong { color:#30483a; font-size:12px; }
+.friends-profile-photo p { margin:3px 0 7px; color:#829087; font-size:10px; }
+.friends-photo-actions { display:flex; flex-wrap:wrap; align-items:center; gap:5px; }
+.friends-photo-button { position:relative; min-height:29px; cursor:pointer; }
+.friends-photo-button.is-disabled { opacity:.6; cursor:wait; }
+.friends-photo-button input { position:absolute; inset:0; width:100%; height:100%; opacity:0; cursor:pointer; }
+.friends-photo-button input:disabled { cursor:wait; }
+.friends-photo-remove { min-height:29px; }
+.friends-person-mark { width:34px; height:34px; }
 .sidebar-friend-row { display:flex; align-items:center; gap:3px; min-width:0; }
 .friend-compare-control { width:26px; min-width:26px; align-self:stretch; display:grid; place-items:center; border-radius:6px; cursor:pointer; }
 .friend-compare-control:hover { background:#eef2e9; }
@@ -336,12 +350,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .timeline-table { width:max-content; min-width:100%; }
 .timeline-header,.timeline-day-group { display:grid; }
 .timeline-header { position:sticky; top:0; z-index:4; min-height:49px; border-bottom:1px solid #e1e5dc; background:#f5f5ed; }
-.timeline-day-label { position:sticky; left:0; z-index:2; min-width:0; display:flex; align-items:center; justify-content:space-between; gap:5px; padding:0 11px; border-right:1px solid #e6e9df; border-bottom:1px solid #e8eae2; background:#fbfaf4; color:#718278; font-size:11px; font-weight:600; }
+.timeline-day-label { min-width:0; display:flex; align-items:center; justify-content:space-between; gap:5px; padding:0 11px; border-right:1px solid #e6e9df; border-bottom:1px solid #e8eae2; background:#fbfaf4; color:#718278; font-size:11px; font-weight:600; }
 .timeline-day-label b { width:25px; height:25px; flex:none; display:grid; place-items:center; border-radius:50%; color:#476655; font:500 11px var(--app-font-mono); }
 .timeline-day-label.is-today { color:#2e6848; }
 .timeline-day-label.is-today b { background:#2e6848; color:#fffdf5; }
 .timeline-corner { z-index:5; background:#f5f5ed; color:#8d9a8e; font:500 9px var(--app-font-mono); letter-spacing:.1em; }
-.timeline-owner-header,.timeline-owner-label { position:sticky; left:96px; z-index:3; min-width:0; display:flex; align-items:center; padding:0 9px; border-right:1px solid #e6e9df; border-bottom:1px solid #e8eae2; background:#f5f5ed; color:#849286; font:500 9px/1.35 var(--app-font-mono); letter-spacing:.04em; }
+.timeline-owner-header,.timeline-owner-label { min-width:0; display:flex; align-items:center; padding:0 9px; border-right:1px solid #e6e9df; border-bottom:1px solid #e8eae2; background:#f5f5ed; color:#849286; font:500 9px/1.35 var(--app-font-mono); letter-spacing:.04em; }
 .timeline-owner-header { z-index:5; background:#f5f5ed; }
 .timeline-owner-label { overflow:hidden; color:#65776a; background:#f8f8f1; font:600 10px/1.2 var(--app-font-sans, sans-serif); letter-spacing:0; text-overflow:ellipsis; white-space:nowrap; }
 .timeline-hours { display:grid; align-items:center; color:#74857a; font:500 10px var(--app-font-mono); }
